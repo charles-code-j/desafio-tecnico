@@ -1,0 +1,103 @@
+name: CI/CD
+
+# Para começar aqui esta sendo definido o trigger da pipeline ou seja sera executada quando ouver um push para branch fifty-fifty. 
+#Aqui podemos definir demais branchs conforme for decidido.
+on:
+  push:
+    branches:
+      - fifty-fifty
+# Aqui estou declarando variaveis globais que sera usada mais para frente, estas variaveis são referente ao cluste kubernetes.
+env:
+  EKS_CLUSTER_NAME: kubernetes-demo 
+  AWS_REGION: us-east-1
+
+# Esta etapa começamos a definir os jobs e estágios da pipeline
+jobs:
+  #Aqui esta definido o primeiro estagio que será o ci
+  CI:
+    #Aqui defino qual será o sistema operacional que será vinculado a maquina criada por parte do github, para que possa rodar os jobs.
+    runs-on: ubuntu-latest
+    # Esta etapa definimos quais serão os estagios desse job
+    steps:
+      # A primeiro momento estamos fazendo o git checkout na branch que escolhemos para o trigger
+      - name: Get Source Code
+        uses: actions/checkout@v4
+
+      # Neste segundo estagio rodamos os testes unitario ou teste de integração, tudo tem que ser definido conforme o escopo e códificação por parte do desenvolvedor, 
+      #executando a configuração da vesão do node e dos testes.
+      - name: Run Unit Test
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+        run: npm test
+
+      # Esta etapa consiste em instalar uma ferramenta chamada ESLint onde será validada a estrutura do código, 
+      # isso garante que exista uma consistencia no repositorio e boas praticas de codificação. Mas isso exige tambem uma parte do dev para que possa configurar o lint 
+      # dentro do projeto para que depois possamos validar pela pipeline.
+      - name: Install ESLint
+        run: npm install -g eslint
+
+      # Aqui executamos o scan do ESLint para fazer a validação da estrutura.
+      - name: Execution ESLint
+        run: eslint
+        working-directory: ./app
+
+      # Aqui segue uma mesma ideia da stape de cima, mas agora seria voltada as melhores praticas na construção de um Dockerfile, esta ferramenta auxilia na construção de images confiaveis e bem estruturadas.
+      - name: Dockerfile Validation
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: Dockerfile
+          no-fail: true
+
+      # Esta etapa estamos fazendo o login no registry do docker hub um repositorio para as images docker a qual será feito o push e pull
+      - name: Docker Registry Authentication
+        uses: docker/login-action@v2.2.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USR }}
+          password: ${{ secrets.DOCKERHUB_PWD }}
+          
+      # Aqui esta a etapa do build da imagem docker junto com o push    
+      - name: Build Image Docker
+        id: build
+        uses: docker/build-push-action@v4.1.1
+        with:
+          context: ./app
+          file: Dockerfile
+          push: true
+          load: true
+        tags: |
+          charleszt/app:${{ github.run_number }}
+          charleszt/app:latest
+
+
+      # Aqui pulamos para o proximo job caso esteja tudo ok com o CI
+      CD:
+        runs-on: ubuntu-latest
+        needs: [CI]
+        steps:
+          # Como estamos em um novo job fazemos novamente o checkout da branch
+          - name: Get Source Code
+            uses: actions/checkout@v3
+          
+          # Aqui configuramos as credencias da AWS para utilizar nos demais estágios
+          - name: Configure AWS credentials
+            uses: aws-actions/configure-aws-credentials@v1
+            with:
+              aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+              aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+              aws-region: ${{env.AWS_REGION}}
+
+          # Este estagio é bem importante, pois aqui estamos definindo o kube config o qual é responsavel pelo apontamento de qual cluster estamos querendo fazer o deploy ou demais trabalhos.
+          - name: Update kube config 
+            run: aws eks update-kubeconfig --name $EKS_CLUSTER_NAME --region $AWS_REGION
+
+          # Aqui executamos o deploy ele será responsavel por aplicar todas as alterações necessarias.
+          - name: Deploy to EKS(Kubernetes)
+            uses: kodermax/kubectl-aws-eks@main
+            env:
+              DOCKER_REGISTRY: 'charleszt/app'        
+              IMAGE_TAG: ${{ steps.build.outputs.imageid }}
+            run: sed -i.bak "s|DOCKER_IMAGE|$DOCKER_REGISTRY:$IMAGE_TAG|g" kubernetes/app-deployment.yaml
+            with:
+              args: apply -f ./kubernetes         
+         
