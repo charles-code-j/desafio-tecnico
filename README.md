@@ -1,4 +1,5 @@
 # ARQUITETURA DO CLUSTER K8S
-![Teste (6)](https://github.com/charles-code-j/desafio-tecnico/assets/57137735/9b6ca741-7c4e-44d8-9afa-6ba8fb1f188b)
+![Teste drawio](https://github.com/charles-code-j/desafio-tecnico/assets/57137735/7e0d8fa7-6d3b-4984-9403-eb4bef2da84a)
+
 
 
